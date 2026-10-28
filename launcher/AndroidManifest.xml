@@ -1,0 +1,21 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="local.tcl.tvhome" android:versionCode="5" android:versionName="1.4-vpn-status">
+    <uses-sdk android:minSdkVersion="28" android:targetSdkVersion="28" />
+    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+    <uses-feature android:name="android.software.leanback" android:required="false" />
+    <uses-feature android:name="android.hardware.touchscreen" android:required="false" />
+    <queries>
+        <intent><action android:name="android.intent.action.MAIN" /><category android:name="android.intent.category.LEANBACK_LAUNCHER" /></intent>
+        <package android:name="com.tcl.tv" /><package android:name="com.tcl.suspension" />
+    </queries>
+    <application android:theme="@style/Home" android:label="Home · YouTube OKKO Иви" android:icon="@drawable/ic_home" android:banner="@drawable/ic_home" android:allowBackup="false">
+        <activity android:name="com.mihir.tvhome.CarouselActivity" android:exported="false" android:launchMode="singleTask" android:screenOrientation="landscape" android:configChanges="keyboard|keyboardHidden|navigation|orientation|screenLayout|uiMode|screenSize|density" android:excludeFromRecents="true" android:clearTaskOnLaunch="true" android:stateNotNeeded="true" android:windowSoftInputMode="adjustNothing" />
+        <activity-alias android:name="com.mihir.tvhome.MainActivity" android:targetActivity="com.mihir.tvhome.CarouselActivity" android:exported="true">
+            <intent-filter><action android:name="android.intent.action.MAIN" /><category android:name="android.intent.category.HOME" /><category android:name="android.intent.category.DEFAULT" /></intent-filter>
+        </activity-alias>
+        <service android:name="com.mihir.tvhome.SpaceDreamService" android:exported="true" android:label="Космические часы" android:permission="android.permission.BIND_DREAM_SERVICE">
+            <intent-filter><action android:name="android.service.dreams.DreamService" /><category android:name="android.intent.category.DEFAULT" /></intent-filter>
+        </service>
+    </application>
+</manifest>

@@ -1,0 +1,7 @@
+local.tcl.tvhome:array/dock_apps = 0x7f010000
+local.tcl.tvhome:array/hidden_apps = 0x7f010001
+local.tcl.tvhome:drawable/ic_home = 0x7f020000
+local.tcl.tvhome:integer/columns = 0x7f030000
+local.tcl.tvhome:string/input_picker_package = 0x7f040000
+local.tcl.tvhome:string/live_tv_package = 0x7f040001
+local.tcl.tvhome:style/Home = 0x7f050000
