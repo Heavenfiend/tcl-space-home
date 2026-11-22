@@ -12,21 +12,20 @@ import android.content.SharedPreferences;
 import android.content.pm.ActivityInfo;
 import android.content.pm.PackageManager;
 import android.content.pm.ResolveInfo;
-import android.graphics.Bitmap;
-import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.Rect;
 import android.graphics.Typeface;
 import android.graphics.drawable.Drawable;
 import android.graphics.drawable.GradientDrawable;
 import android.os.Bundle;
+import android.text.InputFilter;
+import android.text.TextUtils;
 import android.util.Log;
 import android.view.Gravity;
 import android.view.KeyEvent;
 import android.view.View;
 import android.view.ViewGroup;
 import android.view.ViewOutlineProvider;
-import android.view.accessibility.AccessibilityEvent;
 import android.view.accessibility.AccessibilityNodeInfo;
 import android.view.animation.PathInterpolator;
 import android.widget.FrameLayout;
@@ -36,13 +35,11 @@ import android.widget.ScrollView;
 import android.widget.TextView;
 import android.widget.Toast;
 import java.lang.reflect.Field;
-import java.lang.reflect.Method;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 
@@ -52,17 +49,31 @@ public final class CarouselActivity extends MainActivity {
     private TextView heading;
     private List<View> pills;
     private ScrollView page;
-    private Method glow;
     private int lastHeader;
     private boolean receiverRegistered;
     private final List<View> quickCards = new ArrayList<>();
     private FrameLayout homeClockArea;
     private VpnStatusIndicator vpnStatus;
+    private String resumeGridPackage;
 
     private final BroadcastReceiver packagesChanged = new BroadcastReceiver() {
         @Override public void onReceive(Context context, Intent intent) {
-            if (rail != null) rail.post(() -> { rail.setApps(loadApps(), rail.currentPackage()); attachRail(); });
+            if (intent.getBooleanExtra(Intent.EXTRA_REPLACING, false)
+                    && Intent.ACTION_PACKAGE_REMOVED.equals(intent.getAction())) return;
+            if (rail != null) {
+                rail.removeCallbacks(refreshCatalog);
+                rail.postDelayed(refreshCatalog, 160);
+            }
         }
+    };
+
+    private final Runnable refreshCatalog = () -> {
+        if (rail == null) return;
+        String gridPackage = focusedGridPackage();
+        rail.settle();
+        rail.setApps(loadApps(), rail.currentPackage());
+        attachRail();
+        if (gridPackage != null && !focusGridPackage(gridPackage)) rail.requestFocus();
     };
 
     @SuppressWarnings("unchecked")
@@ -84,10 +95,9 @@ public final class CarouselActivity extends MainActivity {
             originalDock = legacy("dockRow");
             heading = legacy("title");
             pills = legacy("pills");
+            styleHome();
             attachVpnIndicator();
             page = legacy("scroll");
-            glow = MainActivity.class.getDeclaredMethod("animateGlow", int.class);
-            glow.setAccessible(true);
             rail = new Rail(this);
             rail.setId(View.generateViewId());
             String selected = getSharedPreferences("carousel", MODE_PRIVATE).getString("selected", "com.google.android.youtube.tv");
@@ -100,9 +110,57 @@ public final class CarouselActivity extends MainActivity {
             filter.addDataScheme("package");
             registerReceiver(packagesChanged, filter);
             receiverRegistered = true;
-        } catch (RuntimeException | ReflectiveOperationException e) {
+        } catch (RuntimeException e) {
             Log.e("TvHomeCarousel", "Could not attach carousel; original home remains available", e);
             rail = null;
+        }
+    }
+
+    private void styleHome() {
+        ((View) legacy("glow")).setVisibility(View.GONE);
+        FrameLayout hero = legacy("hero");
+        hero.setBackground(new GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM,
+                new int[]{0x6b050c17, 0x89071020, 0x6806101e, 0x3006101e}));
+        heading.setTextColor(GlassSurface.TEXT);
+        heading.setTextSize(29);
+        heading.setSingleLine(true);
+        heading.setEllipsize(TextUtils.TruncateAt.END);
+        heading.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
+
+        TvIcon.Glyph[] glyphs = {TvIcon.Glyph.INPUTS, TvIcon.Glyph.WIFI, TvIcon.Glyph.SETTINGS};
+        for (int i = 0; i < pills.size() && i < glyphs.length; i++) {
+            TextView pill = (TextView) pills.get(i);
+            TvIcon.set(pill, glyphs[i], GlassSurface.TEXT, 19);
+            pill.setTextSize(13);
+            pill.setTextColor(GlassSurface.TEXT);
+            pill.setSingleLine(true);
+            pill.setEllipsize(TextUtils.TruncateAt.END);
+            pill.setPadding(dp(14), 0, dp(14), 0);
+            pill.getLayoutParams().height = dp(40);
+            pill.setOnFocusChangeListener(null);
+            GlassSurface.styleControl(pill, GlassSurface.Finish.CONTROL, 18, 1.045f);
+            switch (glyphs[i]) {
+                case INPUTS:
+                    pill.setText("Входы");
+                    break;
+                case WIFI:
+                    pill.setMaxWidth(dp(169));
+                    // The legacy activity refreshes the Wi-Fi text on network and clock events.
+                    InputFilter stripLegacyGlyph = (source, start, end, dest, replaceStart, replaceEnd) -> {
+                        String name = source.subSequence(start, end).toString();
+                        if (!name.startsWith("◉  ")) return null;
+                        String network = name.substring(3);
+                        return "Offline".equals(network) ? "Нет сети" : network;
+                    };
+                    pill.setFilters(new InputFilter[]{stripLegacyGlyph});
+                    pill.setText(pill.getText());
+                    break;
+                case SETTINGS:
+                    pill.setText("Настройки");
+                    break;
+                default:
+                    break;
+            }
         }
     }
 
@@ -115,7 +173,11 @@ public final class CarouselActivity extends MainActivity {
         originalGrid.removeAllViews();
         ((List<View>) legacy("gridCards")).clear();
         TextView allLabel = legacy("appsLabel");
-        allLabel.setText("ВСЕ ПРИЛОЖЕНИЯ");
+        allLabel.setText("Все приложения");
+        allLabel.setTextSize(24);
+        allLabel.setTextColor(GlassSurface.TEXT);
+        allLabel.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
+        allLabel.setLetterSpacing(0f);
         allLabel.setVisibility(View.VISIBLE);
         buildQuickGrid(originalGrid);
         centerHomeClock();
@@ -129,7 +191,6 @@ public final class CarouselActivity extends MainActivity {
         dock.clear();
         dock.add(rail);
         for (View pill : pills) pill.setNextFocusDownId(rail.getId());
-        page.scrollTo(0, 0);
         updateHeading();
     }
 
@@ -155,7 +216,7 @@ public final class CarouselActivity extends MainActivity {
         clock.setPadding(0, 0, 0, 0);
         homeClockArea.addView(clock, new FrameLayout.LayoutParams(-2, -2, Gravity.CENTER));
         date.setTextSize(17);
-        date.setTextColor(0xffe4e6ff);
+        date.setTextColor(GlassSurface.SECONDARY_TEXT);
         date.setLetterSpacing(0.1f);
         date.setGravity(Gravity.CENTER);
         date.setPadding(0, 0, 0, 0);
@@ -169,8 +230,8 @@ public final class CarouselActivity extends MainActivity {
         View firstPill = pills.get(0);
         LinearLayout header = (LinearLayout) firstPill.getParent();
         vpnStatus = new VpnStatusIndicator(this);
-        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(dp(125), firstPill.getLayoutParams().height);
-        params.rightMargin = dp(10);
+        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(-2, firstPill.getLayoutParams().height);
+        params.setMarginEnd(dp(12));
         header.addView(vpnStatus, 0, params);
     }
 
@@ -178,16 +239,31 @@ public final class CarouselActivity extends MainActivity {
         super.onResume();
         if (vpnStatus != null) vpnStatus.start();
         if (rail != null) {
-            attachRail();
-            rail.requestFocus();
+            if (!((List<View>) legacy("dockCards")).contains(rail)) {
+                // The base activity replaces the views when the system reports a catalog change.
+                rail.setApps(loadApps(), rail.currentPackage());
+                attachRail();
+            }
+            if (resumeGridPackage == null || !focusGridPackage(resumeGridPackage)) rail.requestFocus();
+            resumeGridPackage = null;
         }
+    }
+
+    @Override protected void onNewIntent(Intent intent) {
+        super.onNewIntent(intent);
+        resumeGridPackage = null;
     }
 
     @Override protected void onPause() {
         if (vpnStatus != null) vpnStatus.stop();
         if (rail != null) {
+            resumeGridPackage = focusedGridPackage();
             rail.settle();
-            getSharedPreferences("carousel", MODE_PRIVATE).edit().putString("selected", rail.currentPackage()).apply();
+            SharedPreferences preferences = getSharedPreferences("carousel", MODE_PRIVATE);
+            String selected = rail.currentPackage();
+            if (!selected.equals(preferences.getString("selected", ""))) {
+                preferences.edit().putString("selected", selected).apply();
+            }
         }
         super.onPause();
     }
@@ -195,7 +271,10 @@ public final class CarouselActivity extends MainActivity {
     @Override protected void onDestroy() {
         if (vpnStatus != null) vpnStatus.stop();
         if (receiverRegistered) unregisterReceiver(packagesChanged);
-        if (rail != null) rail.settle();
+        if (rail != null) {
+            rail.removeCallbacks(refreshCatalog);
+            rail.settle();
+        }
         super.onDestroy();
     }
 
@@ -216,13 +295,25 @@ public final class CarouselActivity extends MainActivity {
         else { page.smoothScrollTo(0, 0); rail.requestFocus(); }
     }
 
+    private String focusedGridPackage() {
+        View focused = getCurrentFocus();
+        return quickCards.contains(focused) ? (String) focused.getTag() : null;
+    }
+
+    private boolean focusGridPackage(String pkg) {
+        for (View tile : quickCards) if (pkg.equals(tile.getTag())) return tile.requestFocus();
+        return false;
+    }
+
     private void buildQuickGrid(LinearLayout grid) {
         quickCards.clear();
-        int cols = 5;
+        int cols = Math.max(2, Math.min(5, getResources().getDisplayMetrics().widthPixels / dp(172)));
+        grid.setClipChildren(false);
+        grid.setClipToPadding(false);
         for (int row = 0; row * cols < rail.apps.size(); row++) {
             LinearLayout line = new LinearLayout(this);
             line.setClipChildren(false);
-            grid.addView(line, new LinearLayout.LayoutParams(-1, dp(130)));
+            grid.addView(line, new LinearLayout.LayoutParams(-1, -2));
             for (int col = 0; col < cols; col++) {
                 int index = row * cols + col;
                 if (index >= rail.apps.size()) { line.addView(new View(this), new LinearLayout.LayoutParams(0, 1, 1)); continue; }
@@ -233,25 +324,34 @@ public final class CarouselActivity extends MainActivity {
                 tile.setGravity(Gravity.CENTER);
                 tile.setFocusable(true);
                 tile.setFocusableInTouchMode(true);
-                tile.setPadding(dp(8), dp(8), dp(8), dp(8));
-                GradientDrawable bg = new GradientDrawable();
-                bg.setColor(0xb3182135); bg.setCornerRadius(dp(13));
-                tile.setBackground(bg);
+                tile.setPadding(dp(8), dp(9), dp(8), dp(7));
+                tile.setTag(app.pkg);
+                GlassSurface.styleControl(tile, GlassSurface.Finish.TILE, 16, 1.035f);
+
                 ImageView icon = new ImageView(this);
-                icon.setImageDrawable(app.art.getConstantState() == null ? app.art : app.art.getConstantState().newDrawable(getResources()));
+                icon.setImageDrawable(copyAppIcon(app));
                 icon.setScaleType(ImageView.ScaleType.FIT_CENTER);
-                tile.addView(icon, new LinearLayout.LayoutParams(-1, dp(76)));
+                icon.setBackground(roundedColor(0x660b1422, 12));
+                icon.setClipToOutline(true);
+                icon.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
+                tile.addView(icon, new LinearLayout.LayoutParams(dp(52), dp(52)));
+
                 TextView label = new TextView(this);
-                label.setText(app.label); label.setTextColor(Color.WHITE); label.setTextSize(14); label.setGravity(Gravity.CENTER); label.setMaxLines(1);
-                tile.addView(label, new LinearLayout.LayoutParams(-1, dp(30)));
+                label.setText(app.label);
+                label.setTextColor(GlassSurface.TEXT);
+                label.setTextSize(14);
+                label.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
+                label.setGravity(Gravity.CENTER);
+                label.setMaxLines(2);
+                label.setEllipsize(TextUtils.TruncateAt.END);
+                label.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
+                LinearLayout.LayoutParams labelParams = new LinearLayout.LayoutParams(-1, -2);
+                labelParams.topMargin = dp(6);
+                tile.addView(label, labelParams);
+
                 tile.setContentDescription(app.label);
                 tile.setOnClickListener(v -> launch(app));
-                tile.setOnFocusChangeListener((v, focused) -> {
-                    bg.setColor(focused ? 0xee344e7c : 0xb3182135);
-                    bg.setStroke(dp(focused ? 2 : 0), 0xff8de5ff);
-                    tile.animate().scaleX(focused ? 1.04f : 1f).scaleY(focused ? 1.04f : 1f).setDuration(180).start();
-                    if (focused) page.smoothScrollTo(0, ((View) legacy("hero")).getHeight());
-                });
+                tile.setMinimumHeight(dp(111));
                 final int itemIndex = index;
                 tile.setOnKeyListener((v, key, event) -> {
                     if (event.getAction() == KeyEvent.ACTION_DOWN && key == KeyEvent.KEYCODE_DPAD_UP && itemIndex < cols) {
@@ -259,7 +359,8 @@ public final class CarouselActivity extends MainActivity {
                     }
                     return false;
                 });
-                LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0, dp(116), 1); lp.setMargins(dp(6), dp(6), dp(6), dp(6));
+                LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0, -2, 1);
+                lp.setMargins(dp(6), dp(6), dp(6), dp(6));
                 line.addView(tile, lp); quickCards.add(tile);
             }
         }
@@ -274,10 +375,7 @@ public final class CarouselActivity extends MainActivity {
     }
 
     private void updateHeading() {
-        if (rail == null || rail.apps.isEmpty()) return;
-        App app = rail.apps.get(rail.index);
-        heading.setText(app.label);
-        try { glow.invoke(this, app.color); } catch (ReflectiveOperationException ignored) { }
+        if (rail != null) heading.setText(rail.apps.isEmpty() ? "Приложения" : rail.apps.get(rail.index).label);
     }
 
     private int dp(float value) { return Math.round(value * getResources().getDisplayMetrics().density); }
@@ -286,9 +384,8 @@ public final class CarouselActivity extends MainActivity {
         String pkg;
         String label;
         ComponentName component;
-        Drawable art;
-        boolean banner;
-        int color;
+        Drawable banner;
+        Drawable icon;
     }
 
     private List<App> loadApps() {
@@ -304,11 +401,9 @@ public final class CarouselActivity extends MainActivity {
             app.pkg = activity.packageName;
             app.label = info.loadLabel(manager).toString();
             app.component = new ComponentName(app.pkg, activity.name);
-            app.art = activity.loadBanner(manager);
-            if (app.art == null) app.art = activity.applicationInfo.loadBanner(manager);
-            app.banner = app.art != null;
-            if (app.art == null) app.art = info.loadIcon(manager);
-            app.color = sample(app.art);
+            app.banner = activity.loadBanner(manager);
+            if (app.banner == null) app.banner = activity.applicationInfo.loadBanner(manager);
+            app.icon = info.loadIcon(manager);
             unique.put(app.pkg, app);
         }
         List<App> result = new ArrayList<>();
@@ -319,28 +414,17 @@ public final class CarouselActivity extends MainActivity {
         List<App> rest = new ArrayList<>(unique.values());
         rest.sort((a, b) -> a.label.compareToIgnoreCase(b.label));
         result.addAll(rest);
-        Log.i("TvHomeCarousel", "Loaded " + result.size() + " apps: " + result.stream().map(a -> a.pkg).reduce((a, b) -> a + "," + b).orElse(""));
+        Log.i("TvHomeCarousel", "Loaded " + result.size() + " apps");
         return result;
     }
 
-    private int sample(Drawable drawable) {
-        if (drawable == null) return Color.rgb(55, 70, 95);
-        Bitmap bitmap = Bitmap.createBitmap(24, 14, Bitmap.Config.ARGB_8888);
-        Rect old = new Rect(drawable.getBounds());
-        drawable.setBounds(0, 0, 24, 14);
-        drawable.draw(new Canvas(bitmap));
-        drawable.setBounds(old);
-        int red = 0, green = 0, blue = 0, count = 0;
-        for (int y = 0; y < 14; y++) for (int x = 0; x < 24; x++) {
-            int color = bitmap.getPixel(x, y);
-            if (Color.alpha(color) < 128) continue;
-            int max = Math.max(Color.red(color), Math.max(Color.green(color), Color.blue(color)));
-            int min = Math.min(Color.red(color), Math.min(Color.green(color), Color.blue(color)));
-            if (max - min < 35 || max < 55) continue;
-            red += Color.red(color); green += Color.green(color); blue += Color.blue(color); count++;
-        }
-        bitmap.recycle();
-        return count == 0 ? Color.rgb(55, 70, 95) : Color.rgb(red / count, green / count, blue / count);
+    private Drawable copyArtwork(Drawable artwork) {
+        if (artwork == null || artwork.getConstantState() == null) return artwork;
+        return artwork.getConstantState().newDrawable(getResources()).mutate();
+    }
+
+    private Drawable copyAppIcon(App app) {
+        return "local.tcl.vpnguard".equals(app.pkg) ? TvIcon.guardArtwork() : copyArtwork(app.icon);
     }
 
     private void launch(App app) {
@@ -351,6 +435,10 @@ public final class CarouselActivity extends MainActivity {
     }
 
     private final class Rail extends FrameLayout {
+        private static final int FIRST_SLOT = -2;
+        private static final int LAST_SLOT = 4;
+        private static final int MAX_QUEUED_STEPS = 4;
+        private final PathInterpolator easeOut = new PathInterpolator(0.2f, 0.65f, 0.25f, 1f);
         private final List<Card> cards = new ArrayList<>();
         private final TextView counter;
         private List<App> apps = new ArrayList<>();
@@ -370,24 +458,27 @@ public final class CarouselActivity extends MainActivity {
             setDescendantFocusability(FOCUS_BLOCK_DESCENDANTS);
             setClipChildren(true);
             setClipToPadding(true);
-            GradientDrawable background = new GradientDrawable();
-            background.setColor(0x20ffffff);
-            background.setCornerRadius(dp(26));
-            background.setStroke(dp(1), 0x14ffffff);
-            setBackground(background);
-            for (int slot = -2; slot <= 4; slot++) {
+            setDefaultFocusHighlightEnabled(false);
+            setBackground(new GlassSurface(context, GlassSurface.Finish.PANEL, 25));
+            setClipToOutline(true);
+            setOnClickListener(view -> {
+                settle();
+                if (!apps.isEmpty()) launch(apps.get(index));
+            });
+            for (int slot = FIRST_SLOT; slot <= LAST_SLOT; slot++) {
                 Card card = new Card(context, slot);
                 cards.add(card);
                 addView(card);
             }
             counter = new TextView(context);
-            counter.setTextColor(0xb8ffffff);
-            counter.setTextSize(11);
-            counter.setLetterSpacing(0.14f);
+            counter.setTextColor(GlassSurface.SECONDARY_TEXT);
+            counter.setTextSize(12);
+            counter.setLetterSpacing(0.045f);
+            counter.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
             counter.setGravity(Gravity.CENTER);
             counter.setImportantForAccessibility(IMPORTANT_FOR_ACCESSIBILITY_NO);
             FrameLayout.LayoutParams countParams = new FrameLayout.LayoutParams(-1, dp(24), Gravity.BOTTOM);
-            countParams.bottomMargin = dp(3);
+            countParams.bottomMargin = dp(5);
             addView(counter, countParams);
         }
 
@@ -406,10 +497,12 @@ public final class CarouselActivity extends MainActivity {
 
         private void bindCards() {
             for (Card card : cards) {
-                card.setVisibility(apps.isEmpty() ? INVISIBLE : VISIBLE);
-                if (!apps.isEmpty()) card.bind(apps.get(wrap(index + card.slot)));
+                boolean visible = !apps.isEmpty() && (apps.size() > 1 || card.slot == 0);
+                card.setVisibility(visible ? VISIBLE : INVISIBLE);
+                if (visible) card.bind(apps.get(wrap(index + card.slot)));
             }
-            counter.setText(apps.isEmpty() ? "Нет приложений" : String.format(Locale.ROOT, "‹   %d / %d   ›", index + 1, apps.size()));
+            setClickable(!apps.isEmpty());
+            counter.setText(apps.isEmpty() ? "Нет приложений" : "‹   " + (index + 1) + " из " + apps.size() + "   ›");
             setContentDescription(apps.isEmpty() ? "Нет приложений" : "Карусель приложений: " + apps.get(index).label + ", " + (index + 1) + " из " + apps.size());
             positionCards();
             updateHeading();
@@ -417,18 +510,17 @@ public final class CarouselActivity extends MainActivity {
 
         @Override protected void onMeasure(int widthSpec, int heightSpec) {
             int width = View.MeasureSpec.getSize(widthSpec);
-            anchor = dp(22);
-            cardWidth = Math.max(dp(100), (width - dp(72)) / 3f);
-            step = cardWidth + dp(20);
+            int height = View.MeasureSpec.getSize(heightSpec);
+            anchor = dp(24);
+            float widthFromHeight = (height - dp(56)) * 16f / 9f;
+            cardWidth = Math.max(dp(96), Math.min((width - dp(91)) / 3f, widthFromHeight));
+            step = cardWidth + dp(16);
             int cardHeight = Math.round(cardWidth * 9f / 16f);
             for (Card card : cards) {
                 FrameLayout.LayoutParams params = (FrameLayout.LayoutParams) card.getLayoutParams();
-                if (params.width != Math.round(cardWidth) || params.height != cardHeight || params.topMargin != dp(23)) {
-                    params.width = Math.round(cardWidth);
-                    params.height = cardHeight;
-                    params.topMargin = dp(23);
-                    card.setLayoutParams(params);
-                }
+                params.width = Math.round(cardWidth);
+                params.height = cardHeight;
+                params.topMargin = dp(22);
                 card.setPivotX(cardWidth / 2f);
                 card.setPivotY(cardHeight / 2f);
             }
@@ -443,35 +535,50 @@ public final class CarouselActivity extends MainActivity {
 
         private void positionCards() {
             if (cardWidth <= 0) return;
+            boolean focused = isFocused();
+            boolean pressed = isPressed();
             for (Card card : cards) {
+                if (card.getVisibility() != VISIBLE) continue;
                 float relative = card.slot - offset;
                 float emphasis = Math.max(0f, 1f - Math.abs(relative));
-                float scale = 1f + 0.075f * emphasis;
+                float scale = 1f + (pressed ? 0.012f : focused ? 0.06f : 0.026f) * emphasis;
                 card.setTranslationX(anchor + relative * step);
                 card.setScaleX(scale);
                 card.setScaleY(scale);
-                card.setElevation(dp(4 + 8 * emphasis));
-                card.shade.setAlpha(0.13f * (1f - emphasis));
-                card.outline.setAlpha(isFocused() ? emphasis : emphasis * 0.25f);
+                card.setTranslationZ(dp(3) * emphasis);
+                card.shade.setAlpha(pressed ? 0.12f : 0.16f * (1f - emphasis));
+                card.outline.setAlpha(focused ? emphasis : 0f);
             }
         }
 
         void move(int sign, boolean repeated) {
             if (apps.size() < 2) return;
-            if (animator != null) { queued = Math.max(-3, Math.min(3, queued + sign)); return; }
+            setPressed(false);
+            if (animator != null) {
+                int next = queued + sign;
+                if (!repeated && Math.abs(next) > MAX_QUEUED_STEPS) {
+                    queued = next;
+                    settle();
+                } else {
+                    queued = Math.max(-MAX_QUEUED_STEPS, Math.min(MAX_QUEUED_STEPS, next));
+                }
+                return;
+            }
+            if (!ValueAnimator.areAnimatorsEnabled()) {
+                finishStep(sign);
+                return;
+            }
             direction = sign;
             animator = ValueAnimator.ofFloat(0f, sign);
-            animator.setDuration(repeated ? 290 : 460);
-            animator.setInterpolator(new PathInterpolator(0.22f, 0.7f, 0.25f, 1f));
+            animator.setDuration(repeated ? 100 : 174);
+            animator.setInterpolator(easeOut);
             animator.addUpdateListener(value -> { offset = (float) value.getAnimatedValue(); positionCards(); });
             animator.addListener(new AnimatorListenerAdapter() {
                 @Override public void onAnimationEnd(Animator animation) {
-                    index = wrap(index + direction);
                     animator = null;
                     direction = 0;
                     offset = 0;
-                    bindCards();
-                    Log.i("TvHomeCarousel", "Selected " + index + "/" + apps.size() + " " + currentPackage());
+                    finishStep(sign);
                     if (queued != 0) {
                         int next = Integer.signum(queued);
                         queued -= next;
@@ -480,6 +587,15 @@ public final class CarouselActivity extends MainActivity {
                 }
             });
             animator.start();
+        }
+
+        private void finishStep(int sign) {
+            index = wrap(index + sign);
+            // Reuse the cards that stayed in the viewport and only bind the incoming edge.
+            if (sign > 0) cards.add(cards.remove(0));
+            else cards.add(0, cards.remove(cards.size() - 1));
+            for (int i = 0; i < cards.size(); i++) cards.get(i).slot = FIRST_SLOT + i;
+            bindCards();
         }
 
         void settle() {
@@ -493,7 +609,8 @@ public final class CarouselActivity extends MainActivity {
             direction = 0;
             queued = 0;
             offset = 0;
-            if (counter != null) bindCards();
+            setPressed(false);
+            bindCards();
         }
 
         @Override public boolean onKeyDown(int code, KeyEvent event) {
@@ -502,7 +619,10 @@ public final class CarouselActivity extends MainActivity {
                 return true;
             }
             if (code == KeyEvent.KEYCODE_DPAD_CENTER || code == KeyEvent.KEYCODE_ENTER) {
-                if (event.getRepeatCount() == 0 && !apps.isEmpty()) { settle(); launch(apps.get(index)); }
+                if (event.getRepeatCount() == 0 && !apps.isEmpty()) {
+                    settle();
+                    setPressed(true);
+                }
                 return true;
             }
             if (code == KeyEvent.KEYCODE_DPAD_UP && !pills.isEmpty()) {
@@ -510,12 +630,35 @@ public final class CarouselActivity extends MainActivity {
                 pills.get(Math.min(lastHeader, pills.size() - 1)).requestFocus();
                 return true;
             }
-            if (code == KeyEvent.KEYCODE_DPAD_DOWN) { if (!quickCards.isEmpty()) { settle(); quickCards.get(0).requestFocus(); } return true; }
+            if (code == KeyEvent.KEYCODE_DPAD_DOWN) {
+                if (!quickCards.isEmpty()) {
+                    settle();
+                    quickCards.get(0).requestFocus();
+                    page.smoothScrollTo(0, ((View) legacy("hero")).getHeight());
+                }
+                return true;
+            }
             return super.onKeyDown(code, event);
+        }
+
+        @Override public boolean onKeyUp(int code, KeyEvent event) {
+            if (code == KeyEvent.KEYCODE_DPAD_CENTER || code == KeyEvent.KEYCODE_ENTER) {
+                boolean activate = isPressed() && !event.isCanceled();
+                setPressed(false);
+                if (activate) performClick();
+                return true;
+            }
+            return super.onKeyUp(code, event);
+        }
+
+        @Override protected void dispatchSetPressed(boolean pressed) {
+            super.dispatchSetPressed(pressed);
+            positionCards();
         }
 
         @Override protected void onFocusChanged(boolean focus, int direction, Rect rect) {
             super.onFocusChanged(focus, direction, rect);
+            if (!focus) setPressed(false);
             positionCards();
         }
 
@@ -523,70 +666,91 @@ public final class CarouselActivity extends MainActivity {
             super.onInitializeAccessibilityNodeInfo(info);
             info.setClassName("android.widget.HorizontalScrollView");
             info.setScrollable(apps.size() > 1);
-            info.addAction(AccessibilityNodeInfo.ACTION_SCROLL_FORWARD);
-            info.addAction(AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD);
-            info.addAction(AccessibilityNodeInfo.ACTION_CLICK);
+            if (apps.size() > 1) {
+                info.addAction(AccessibilityNodeInfo.ACTION_SCROLL_FORWARD);
+                info.addAction(AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD);
+            }
         }
 
         @Override public boolean performAccessibilityAction(int action, Bundle args) {
             if (action == AccessibilityNodeInfo.ACTION_SCROLL_FORWARD) { move(1, false); return true; }
             if (action == AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD) { move(-1, false); return true; }
-            if (action == AccessibilityNodeInfo.ACTION_CLICK && !apps.isEmpty()) { settle(); launch(apps.get(index)); return true; }
+            if (action == AccessibilityNodeInfo.ACTION_CLICK && !apps.isEmpty()) return performClick();
             return super.performAccessibilityAction(action, args);
         }
 
         private final class Card extends FrameLayout {
-            final int slot;
+            int slot;
             final ImageView image;
             final TextView label;
             final View shade;
             final View outline;
+            private App bound;
 
             Card(Context context, int slot) {
                 super(context);
                 this.slot = slot;
                 setFocusable(false);
+                setImportantForAccessibility(IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS);
                 setClipToOutline(true);
                 setOutlineProvider(ViewOutlineProvider.BACKGROUND);
-                GradientDrawable background = new GradientDrawable();
-                background.setCornerRadius(dp(12));
-                background.setColor(0xff18212e);
-                setBackground(background);
+                setBackground(new GlassSurface(context, GlassSurface.Finish.TILE, 16));
                 image = new ImageView(context);
-                addView(image, new FrameLayout.LayoutParams(-1, -1));
+                image.setBackground(roundedColor(0xff0d1727, 12));
+                image.setClipToOutline(true);
+                FrameLayout.LayoutParams imageParams = new FrameLayout.LayoutParams(-1, -1);
+                imageParams.setMargins(dp(5), dp(5), dp(5), dp(5));
+                addView(image, imageParams);
                 label = new TextView(context);
-                label.setTextColor(Color.WHITE);
+                label.setTextColor(GlassSurface.TEXT);
                 label.setTextSize(16);
                 label.setGravity(Gravity.CENTER);
                 label.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
                 label.setMaxLines(2);
+                label.setEllipsize(TextUtils.TruncateAt.END);
                 label.setPadding(dp(8), 0, dp(8), dp(8));
                 addView(label, new FrameLayout.LayoutParams(-1, dp(44), Gravity.BOTTOM));
                 shade = new View(context);
                 shade.setBackgroundColor(Color.BLACK);
                 addView(shade, new FrameLayout.LayoutParams(-1, -1));
                 outline = new View(context);
-                GradientDrawable border = new GradientDrawable();
-                border.setCornerRadius(dp(12));
-                border.setStroke(dp(2), 0xeeffffff);
+                GradientDrawable border = roundedColor(Color.TRANSPARENT, 16);
+                border.setStroke(dp(2.5f), GlassSurface.FOCUS_EDGE);
                 outline.setBackground(border);
                 addView(outline, new FrameLayout.LayoutParams(-1, -1));
                 setOnClickListener(view -> {
                     Rail.this.requestFocus();
-                    if (slot == 0 && !apps.isEmpty()) { settle(); launch(apps.get(index)); }
-                    else { settle(); for (int i = 0; i < Math.abs(slot); i++) move(Integer.signum(slot), false); }
+                    if (apps.isEmpty()) return;
+                    int selectedSlot = slot;
+                    int target = wrap(index + selectedSlot);
+                    if (selectedSlot == 0 && animator == null) Rail.this.performClick();
+                    else if (Math.abs(selectedSlot) == 1 && animator == null) move(selectedSlot, false);
+                    else {
+                        settle();
+                        index = target;
+                        bindCards();
+                    }
                 });
             }
 
             void bind(App app) {
-                setContentDescription(app.label);
-                image.setImageDrawable(app.art == null ? null : app.art.getConstantState() == null ? app.art : app.art.getConstantState().newDrawable(getResources()).mutate());
-                image.setScaleType(app.banner ? ImageView.ScaleType.FIT_XY : ImageView.ScaleType.CENTER_INSIDE);
-                int inset = app.banner ? 0 : dp(33);
-                image.setPadding(inset, app.banner ? 0 : dp(19), inset, app.banner ? 0 : dp(43));
-                label.setVisibility(app.banner ? GONE : VISIBLE);
-                label.setText(app.label);
+                if (bound == app) return;
+                bound = app;
+                boolean hasBanner = app.banner != null;
+                image.setImageDrawable(hasBanner ? copyArtwork(app.banner) : copyAppIcon(app));
+                image.setScaleType(ImageView.ScaleType.FIT_CENTER);
+                int inset = hasBanner ? 0 : dp(32);
+                image.setPadding(inset, hasBanner ? 0 : dp(15), inset, hasBanner ? 0 : dp(46));
+                label.setVisibility(hasBanner ? GONE : VISIBLE);
+                if (!hasBanner) label.setText(app.label);
             }
         }
+    }
+
+    private GradientDrawable roundedColor(int color, int radius) {
+        GradientDrawable background = new GradientDrawable();
+        background.setColor(color);
+        background.setCornerRadius(dp(radius));
+        return background;
     }
 }

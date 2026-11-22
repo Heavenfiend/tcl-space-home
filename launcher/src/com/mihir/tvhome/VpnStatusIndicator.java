@@ -27,15 +27,15 @@ final class VpnStatusIndicator extends TextView {
     VpnStatusIndicator(Context context) {
         super(context);
         connectivity = context.getSystemService(ConnectivityManager.class);
-        setTextSize(12);
+        setTextSize(13);
         setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
         setGravity(Gravity.CENTER);
         setSingleLine(true);
         setIncludeFontPadding(false);
-        setPadding(dp(12), 0, dp(12), 0);
+        setPadding(dp(13), 0, dp(14), 0);
         setFocusable(false);
         setClickable(false);
-        background.setCornerRadius(dp(24));
+        background.setCornerRadius(dp(18));
         setBackground(background);
         show(null);
     }
@@ -88,11 +88,13 @@ final class VpnStatusIndicator extends TextView {
         hasDisplay = true;
         displayed = active;
         boolean connected = Boolean.TRUE.equals(active);
-        int color = active == null ? 0xffcbd5e1 : connected ? 0xff8cf0ba : 0xffffa7a7;
-        setText(active == null ? "●  VPN: ?" : connected ? "●  VPN: ВКЛ" : "●  VPN: ВЫКЛ");
+        int color = active == null ? 0xffd5dfeb : connected ? 0xffaef4cd : 0xffffc4c6;
+        TvIcon.set(this, active == null ? TvIcon.Glyph.VPN_UNKNOWN
+                : connected ? TvIcon.Glyph.VPN_ON : TvIcon.Glyph.VPN_OFF, color, 19);
+        setText(active == null ? "VPN: статус неизвестен" : connected ? "VPN включён" : "VPN выключен");
         setTextColor(color);
-        background.setColor(active == null ? 0x99192230 : connected ? 0xb3103028 : 0xb3352025);
-        background.setStroke(dp(1), active == null ? 0x665f728a : connected ? 0x8875d8a3 : 0x888b5059);
+        background.setColor(active == null ? 0xf51d293a : connected ? 0xf21b392f : 0xf238222d);
+        background.setStroke(dp(1), active == null ? 0xff647d95 : connected ? 0xff508970 : 0xff94636d);
         setContentDescription(active == null ? "Состояние VPN недоступно"
                 : connected ? "VPN подключён" : "VPN отключён");
         Log.i("TvHomeVpn", "VPN transport: " + (active == null ? "unknown" : connected ? "connected" : "disconnected"));
