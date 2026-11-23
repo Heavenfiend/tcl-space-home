@@ -33,17 +33,17 @@ public final class MainActivity extends Activity {
         status.setPadding(0, 16, 0, 16);
         layout.addView(status);
         TextView detail = new TextView(this);
-        detail.setText("Помогает сохранить VPN после выхода из INCY.\nНастройки и подписки INCY не меняет.\nПосле включения VPN откройте YouTube как обычно.\nЗащита запускается после перезагрузки TCL.\nПеред принудительной остановкой INCY в настройках выключите защиту.");
+        detail.setText("Помогает сохранить VPN после выхода из INCY.\nОткрытие INCY из TCL Space Home восстанавливает включённую защиту.\nПеред принудительной остановкой INCY в настройках выключите защиту.");
         detail.setTextSize(16);
         detail.setGravity(Gravity.CENTER);
         detail.setTextColor(Color.rgb(205, 213, 224));
         layout.addView(detail);
         toggle = new Button(this);
         toggle.setOnClickListener(v -> {
-            boolean enabled = getSharedPreferences("guard", MODE_PRIVATE).getBoolean("enabled", false);
-            if (enabled) startService(new Intent(this, GuardService.class).setAction("STOP"));
-            else startForegroundService(new Intent(this, GuardService.class));
+            boolean enabled = GuardService.isEnabled(this);
             getSharedPreferences("guard", MODE_PRIVATE).edit().putBoolean("enabled", !enabled).apply();
+            if (enabled) startService(new Intent(this, GuardService.class).setAction("STOP"));
+            else GuardService.startIfEnabled(this);
             refresh();
         });
         LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(420, 64);
@@ -54,16 +54,13 @@ public final class MainActivity extends Activity {
         close.setOnClickListener(v -> finish());
         layout.addView(close, new LinearLayout.LayoutParams(420, 64));
         setContentView(layout);
-        if (getIntent().getBooleanExtra("enable", false)) {
-            getSharedPreferences("guard", MODE_PRIVATE).edit().putBoolean("enabled", true).apply();
-            startForegroundService(new Intent(this, GuardService.class));
-        }
+        GuardService.startIfEnabled(this);
         refresh();
         toggle.requestFocus();
     }
 
     private void refresh() {
-        boolean enabled = getSharedPreferences("guard", MODE_PRIVATE).getBoolean("enabled", false);
+        boolean enabled = GuardService.isEnabled(this);
         status.setText(enabled ? "Защита включена" : "Защита выключена");
         toggle.setText(enabled ? "Выключить защиту" : "Включить защиту");
     }

@@ -38,6 +38,9 @@ final class TvIcon extends Drawable {
         return new TvIcon(Glyph.GUARD, 0xffa6e9fc);
     }
 
+    @Override public int getIntrinsicWidth() { return 24; }
+    @Override public int getIntrinsicHeight() { return 24; }
+
     @Override public void draw(Canvas canvas) {
         Rect bounds = getBounds();
         int saved = canvas.save();

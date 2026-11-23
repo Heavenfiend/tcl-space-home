@@ -7,6 +7,7 @@ import android.app.NotificationManager;
 import android.app.PendingIntent;
 import android.app.Service;
 import android.content.ComponentName;
+import android.content.Context;
 import android.content.Intent;
 import android.content.pm.ApplicationInfo;
 import android.content.pm.PackageManager;
@@ -21,9 +22,28 @@ import android.util.Log;
 
 public final class GuardService extends Service {
     private static final String TARGET = "llc.itdev.incy";
+    static final String CHECK_TRANSITION = "local.tcl.vpnguard.action.CHECK_TRANSITION";
     private final Handler handler = new Handler(Looper.getMainLooper());
     private boolean armed;
     private long reconnectAt;
+    private long fastCheckUntil;
+
+    static boolean isEnabled(Context context) {
+        return context.getSharedPreferences("guard", Context.MODE_PRIVATE).getBoolean("enabled", false);
+    }
+
+    static void startIfEnabled(Context context) {
+        startIfEnabled(context, null);
+    }
+
+    static void startIfEnabled(Context context, String action) {
+        if (!isEnabled(context)) return;
+        try {
+            context.startForegroundService(new Intent(context, GuardService.class).setAction(action));
+        } catch (IllegalStateException | SecurityException e) {
+            Log.w("TclVpnGuard", "Cannot resume protection: " + e.getClass().getSimpleName());
+        }
+    }
 
     private final Runnable tick = new Runnable() {
         @Override public void run() {
@@ -61,7 +81,7 @@ public final class GuardService extends Service {
             } catch (RuntimeException e) {
                 Log.w("TclVpnGuard", "Protection check failed: " + e.getClass().getSimpleName());
             }
-            handler.postDelayed(this, 500);
+            handler.postDelayed(this, SystemClock.uptimeMillis() < fastCheckUntil ? 100 : 500);
         }
     };
 
@@ -79,17 +99,21 @@ public final class GuardService extends Service {
                 .addAction(new Notification.Action.Builder(null, "Выключить защиту", stop).build()).build();
         startForeground(1, notification);
         Log.i("TclVpnGuard", "Protection service started");
-        handler.post(tick);
     }
 
     @Override public int onStartCommand(Intent intent, int flags, int startId) {
-        if (intent != null && "STOP".equals(intent.getAction())) {
+        if ((intent != null && "STOP".equals(intent.getAction())) || !isEnabled(this)) {
             getSharedPreferences("guard", MODE_PRIVATE).edit().putBoolean("enabled", false).apply();
             stopForeground(true);
             stopSelf();
             return START_NOT_STICKY;
         }
-        getSharedPreferences("guard", MODE_PRIVATE).edit().putBoolean("enabled", true).apply();
+        // INCY's UI becomes a candidate for TCL cleanup as it leaves the foreground.
+        if (intent != null && CHECK_TRANSITION.equals(intent.getAction())) {
+            fastCheckUntil = SystemClock.uptimeMillis() + 3000;
+        }
+        handler.removeCallbacks(tick);
+        handler.post(tick);
         return START_STICKY;
     }
 

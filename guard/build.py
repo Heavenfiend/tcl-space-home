@@ -24,7 +24,7 @@ key=Path(os.environ.get('TVHOME_KEYSTORE') or str(project.parent/'keys/local.jks
 key.parent.mkdir(parents=True,exist_ok=True)
 if not key.exists():
     run([java/'keytool.exe','-genkeypair','-keystore',key,'-storepass','android','-keypass','android','-alias','guard','-keyalg','RSA','-keysize','2048','-validity','3650','-dname','CN=TCL local VPN guard'])
-run([bt/'apksigner.bat','sign','--ks',key,'--ks-pass','pass:android','--ks-key-alias','guard','--min-sdk-version','28','--out',output,build/'aligned.apk'])
+run([bt/'apksigner.bat','sign','--ks',key,'--ks-pass','pass:android','--ks-key-alias','guard','--min-sdk-version','28','--v4-signing-enabled','false','--out',output,build/'aligned.apk'])
 run([bt/'apksigner.bat','verify','--verbose','--min-sdk-version','28',output])
 run([bt/'zipalign.exe','-c','4',output])
 print('APK:',output,'size:',output.stat().st_size,flush=True)

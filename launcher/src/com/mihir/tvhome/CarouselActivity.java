@@ -17,6 +17,7 @@ import android.graphics.Rect;
 import android.graphics.Typeface;
 import android.graphics.drawable.Drawable;
 import android.graphics.drawable.GradientDrawable;
+import android.graphics.drawable.LayerDrawable;
 import android.os.Bundle;
 import android.text.InputFilter;
 import android.text.TextUtils;
@@ -44,6 +45,9 @@ import java.util.Map;
 import java.util.Set;
 
 public final class CarouselActivity extends MainActivity {
+    private static final String INCY_PACKAGE = "llc.itdev.incy";
+    private static final String GUARD_PACKAGE = "local.tcl.vpnguard";
+    private static final String START_GUARD_PERMISSION = "local.tcl.vpnguard.permission.START_ENABLED_GUARD";
     private Rail rail;
     private LinearLayout originalDock;
     private TextView heading;
@@ -55,6 +59,7 @@ public final class CarouselActivity extends MainActivity {
     private FrameLayout homeClockArea;
     private VpnStatusIndicator vpnStatus;
     private String resumeGridPackage;
+    private boolean launchedIncy;
 
     private final BroadcastReceiver packagesChanged = new BroadcastReceiver() {
         @Override public void onReceive(Context context, Intent intent) {
@@ -238,6 +243,10 @@ public final class CarouselActivity extends MainActivity {
     @Override protected void onResume() {
         super.onResume();
         if (vpnStatus != null) vpnStatus.start();
+        if (launchedIncy) {
+            launchedIncy = false;
+            resumeVpnProtection();
+        }
         if (rail != null) {
             if (!((List<View>) legacy("dockCards")).contains(rail)) {
                 // The base activity replaces the views when the system reports a catalog change.
@@ -424,21 +433,37 @@ public final class CarouselActivity extends MainActivity {
     }
 
     private Drawable copyAppIcon(App app) {
-        return "local.tcl.vpnguard".equals(app.pkg) ? TvIcon.guardArtwork() : copyArtwork(app.icon);
+        return GUARD_PACKAGE.equals(app.pkg) ? TvIcon.guardArtwork() : copyArtwork(app.icon);
     }
 
     private void launch(App app) {
+        boolean incy = INCY_PACKAGE.equals(app.pkg);
+        if (incy) resumeVpnProtection();
         try {
             startActivity(new Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LEANBACK_LAUNCHER)
                     .setComponent(app.component).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
+            launchedIncy = incy;
         } catch (RuntimeException e) { Toast.makeText(this, "Не удалось открыть " + app.label, Toast.LENGTH_SHORT).show(); }
+    }
+
+    private void resumeVpnProtection() {
+        if (checkSelfPermission(START_GUARD_PERMISSION) != PackageManager.PERMISSION_GRANTED) return;
+        Intent restore = new Intent("local.tcl.vpnguard.action.START_ENABLED_GUARD")
+                .setClassName(GUARD_PACKAGE, GUARD_PACKAGE + ".StartGuardReceiver")
+                .addFlags(Intent.FLAG_INCLUDE_STOPPED_PACKAGES);
+        try {
+            // The explicit receiver requires the signature permission declared by Guard.
+            sendBroadcast(restore);
+        } catch (SecurityException e) {
+            Log.w("TvHomeVpn", "Cannot resume optional VPN protection", e);
+        }
     }
 
     private final class Rail extends FrameLayout {
         private static final int FIRST_SLOT = -2;
         private static final int LAST_SLOT = 4;
         private static final int MAX_QUEUED_STEPS = 4;
-        private final PathInterpolator easeOut = new PathInterpolator(0.2f, 0.65f, 0.25f, 1f);
+        private final PathInterpolator easeOut = new PathInterpolator(0.22f, 0.72f, 0.2f, 1f);
         private final List<Card> cards = new ArrayList<>();
         private final TextView counter;
         private List<App> apps = new ArrayList<>();
@@ -511,10 +536,12 @@ public final class CarouselActivity extends MainActivity {
         @Override protected void onMeasure(int widthSpec, int heightSpec) {
             int width = View.MeasureSpec.getSize(widthSpec);
             int height = View.MeasureSpec.getSize(heightSpec);
-            anchor = dp(24);
+            int edgeInset = dp(22);
+            int gap = dp(18);
             float widthFromHeight = (height - dp(56)) * 16f / 9f;
-            cardWidth = Math.max(dp(96), Math.min((width - dp(91)) / 3f, widthFromHeight));
-            step = cardWidth + dp(16);
+            cardWidth = Math.max(1f, Math.min((width - 2 * edgeInset - 2 * gap) / 3f, widthFromHeight));
+            step = cardWidth + gap;
+            anchor = (width - 3 * cardWidth - 2 * gap) / 2f;
             int cardHeight = Math.round(cardWidth * 9f / 16f);
             for (Card card : cards) {
                 FrameLayout.LayoutParams params = (FrameLayout.LayoutParams) card.getLayoutParams();
@@ -541,12 +568,15 @@ public final class CarouselActivity extends MainActivity {
                 if (card.getVisibility() != VISIBLE) continue;
                 float relative = card.slot - offset;
                 float emphasis = Math.max(0f, 1f - Math.abs(relative));
-                float scale = 1f + (pressed ? 0.012f : focused ? 0.06f : 0.026f) * emphasis;
+                float visibility = Math.max(0f, Math.min(1f, Math.min(relative + 1f, 3f - relative)));
+                float scale = 1f + (pressed ? -0.009f : focused ? 0.045f : 0.016f) * emphasis;
                 card.setTranslationX(anchor + relative * step);
+                card.setTranslationY(focused && !pressed ? -dp(2) * emphasis : 0f);
                 card.setScaleX(scale);
                 card.setScaleY(scale);
+                card.setAlpha(visibility);
                 card.setTranslationZ(dp(3) * emphasis);
-                card.shade.setAlpha(pressed ? 0.12f : 0.16f * (1f - emphasis));
+                card.shade.setAlpha(0.16f * (1f - emphasis) + (pressed ? 0.13f * emphasis : 0f));
                 card.outline.setAlpha(focused ? emphasis : 0f);
             }
         }
@@ -570,7 +600,7 @@ public final class CarouselActivity extends MainActivity {
             }
             direction = sign;
             animator = ValueAnimator.ofFloat(0f, sign);
-            animator.setDuration(repeated ? 100 : 174);
+            animator.setDuration(repeated ? 116 : 218);
             animator.setInterpolator(easeOut);
             animator.addUpdateListener(value -> { offset = (float) value.getAnimatedValue(); positionCards(); });
             animator.addListener(new AnimatorListenerAdapter() {
@@ -694,13 +724,9 @@ public final class CarouselActivity extends MainActivity {
                 setImportantForAccessibility(IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS);
                 setClipToOutline(true);
                 setOutlineProvider(ViewOutlineProvider.BACKGROUND);
-                setBackground(new GlassSurface(context, GlassSurface.Finish.TILE, 16));
+                setBackground(new GlassSurface(context, GlassSurface.Finish.TILE, 21));
                 image = new ImageView(context);
-                image.setBackground(roundedColor(0xff0d1727, 12));
-                image.setClipToOutline(true);
-                FrameLayout.LayoutParams imageParams = new FrameLayout.LayoutParams(-1, -1);
-                imageParams.setMargins(dp(5), dp(5), dp(5), dp(5));
-                addView(image, imageParams);
+                addView(image, new FrameLayout.LayoutParams(-1, -1));
                 label = new TextView(context);
                 label.setTextColor(GlassSurface.TEXT);
                 label.setTextSize(16);
@@ -714,13 +740,15 @@ public final class CarouselActivity extends MainActivity {
                 shade.setBackgroundColor(Color.BLACK);
                 addView(shade, new FrameLayout.LayoutParams(-1, -1));
                 outline = new View(context);
-                GradientDrawable border = roundedColor(Color.TRANSPARENT, 16);
-                border.setStroke(dp(2.5f), GlassSurface.FOCUS_EDGE);
-                outline.setBackground(border);
+                GradientDrawable darkRim = roundedColor(Color.TRANSPARENT, 21);
+                darkRim.setStroke(dp(4), 0xff0e1b2d);
+                GradientDrawable highlight = roundedColor(Color.TRANSPARENT, 21);
+                highlight.setStroke(dp(2), GlassSurface.FOCUS_EDGE);
+                outline.setBackground(new LayerDrawable(new Drawable[]{darkRim, highlight}));
                 addView(outline, new FrameLayout.LayoutParams(-1, -1));
                 setOnClickListener(view -> {
                     Rail.this.requestFocus();
-                    if (apps.isEmpty()) return;
+                    if (apps.isEmpty() || getAlpha() == 0f) return;
                     int selectedSlot = slot;
                     int target = wrap(index + selectedSlot);
                     if (selectedSlot == 0 && animator == null) Rail.this.performClick();
@@ -738,7 +766,7 @@ public final class CarouselActivity extends MainActivity {
                 bound = app;
                 boolean hasBanner = app.banner != null;
                 image.setImageDrawable(hasBanner ? copyArtwork(app.banner) : copyAppIcon(app));
-                image.setScaleType(ImageView.ScaleType.FIT_CENTER);
+                image.setScaleType(hasBanner ? ImageView.ScaleType.CENTER_CROP : ImageView.ScaleType.FIT_CENTER);
                 int inset = hasBanner ? 0 : dp(32);
                 image.setPadding(inset, hasBanner ? 0 : dp(15), inset, hasBanner ? 0 : dp(46));
                 label.setVisibility(hasBanner ? GONE : VISIBLE);
