@@ -15,6 +15,7 @@ import android.content.pm.ResolveInfo;
 import android.graphics.Color;
 import android.graphics.Rect;
 import android.graphics.Typeface;
+import android.graphics.drawable.BitmapDrawable;
 import android.graphics.drawable.Drawable;
 import android.graphics.drawable.GradientDrawable;
 import android.graphics.drawable.LayerDrawable;
@@ -337,13 +338,17 @@ public final class CarouselActivity extends MainActivity {
                 tile.setTag(app.pkg);
                 GlassSurface.styleControl(tile, GlassSurface.Finish.TILE, 16, 1.035f);
 
+                Drawable artwork = copyAppIcon(app);
+                int iconSize = AppArtwork.fittedIconPixels(artwork, dp(50), true);
+                FrameLayout iconSlot = new FrameLayout(this);
                 ImageView icon = new ImageView(this);
-                icon.setImageDrawable(copyAppIcon(app));
-                icon.setScaleType(ImageView.ScaleType.FIT_CENTER);
-                icon.setBackground(roundedColor(0x660b1422, 12));
+                icon.setImageDrawable(artwork);
+                icon.setScaleType(ImageView.ScaleType.CENTER_CROP);
+                icon.setBackground(roundedColor(0xff122032, 12));
                 icon.setClipToOutline(true);
                 icon.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
-                tile.addView(icon, new LinearLayout.LayoutParams(dp(52), dp(52)));
+                iconSlot.addView(icon, new FrameLayout.LayoutParams(iconSize, iconSize, Gravity.CENTER));
+                tile.addView(iconSlot, new LinearLayout.LayoutParams(dp(52), dp(52)));
 
                 TextView label = new TextView(this);
                 label.setText(app.label);
@@ -393,8 +398,7 @@ public final class CarouselActivity extends MainActivity {
         String pkg;
         String label;
         ComponentName component;
-        Drawable banner;
-        Drawable icon;
+        AppArtwork artwork;
     }
 
     private List<App> loadApps() {
@@ -410,9 +414,7 @@ public final class CarouselActivity extends MainActivity {
             app.pkg = activity.packageName;
             app.label = info.loadLabel(manager).toString();
             app.component = new ComponentName(app.pkg, activity.name);
-            app.banner = activity.loadBanner(manager);
-            if (app.banner == null) app.banner = activity.applicationInfo.loadBanner(manager);
-            app.icon = info.loadIcon(manager);
+            app.artwork = AppArtwork.load(manager, info);
             unique.put(app.pkg, app);
         }
         List<App> result = new ArrayList<>();
@@ -429,11 +431,13 @@ public final class CarouselActivity extends MainActivity {
 
     private Drawable copyArtwork(Drawable artwork) {
         if (artwork == null || artwork.getConstantState() == null) return artwork;
-        return artwork.getConstantState().newDrawable(getResources()).mutate();
+        Drawable copy = artwork.getConstantState().newDrawable(getResources()).mutate();
+        if (copy instanceof BitmapDrawable) ((BitmapDrawable) copy).setFilterBitmap(true);
+        return copy;
     }
 
     private Drawable copyAppIcon(App app) {
-        return GUARD_PACKAGE.equals(app.pkg) ? TvIcon.guardArtwork() : copyArtwork(app.icon);
+        return GUARD_PACKAGE.equals(app.pkg) ? TvIcon.guardArtwork() : copyArtwork(app.artwork.icon);
     }
 
     private void launch(App app) {
@@ -548,6 +552,7 @@ public final class CarouselActivity extends MainActivity {
                 params.width = Math.round(cardWidth);
                 params.height = cardHeight;
                 params.topMargin = dp(22);
+                card.setArtworkSize(params.width, cardHeight);
                 card.setPivotX(cardWidth / 2f);
                 card.setPivotY(cardHeight / 2f);
             }
@@ -716,6 +721,8 @@ public final class CarouselActivity extends MainActivity {
             final View shade;
             final View outline;
             private App bound;
+            private int artworkWidth;
+            private int artworkHeight;
 
             Card(Context context, int slot) {
                 super(context);
@@ -729,13 +736,12 @@ public final class CarouselActivity extends MainActivity {
                 addView(image, new FrameLayout.LayoutParams(-1, -1));
                 label = new TextView(context);
                 label.setTextColor(GlassSurface.TEXT);
-                label.setTextSize(16);
+                label.setTextSize(17);
                 label.setGravity(Gravity.CENTER);
                 label.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
                 label.setMaxLines(2);
                 label.setEllipsize(TextUtils.TruncateAt.END);
-                label.setPadding(dp(8), 0, dp(8), dp(8));
-                addView(label, new FrameLayout.LayoutParams(-1, dp(44), Gravity.BOTTOM));
+                addView(label, new FrameLayout.LayoutParams(-1, dp(42), Gravity.BOTTOM));
                 shade = new View(context);
                 shade.setBackgroundColor(Color.BLACK);
                 addView(shade, new FrameLayout.LayoutParams(-1, -1));
@@ -764,13 +770,54 @@ public final class CarouselActivity extends MainActivity {
             void bind(App app) {
                 if (bound == app) return;
                 bound = app;
-                boolean hasBanner = app.banner != null;
-                image.setImageDrawable(hasBanner ? copyArtwork(app.banner) : copyAppIcon(app));
-                image.setScaleType(hasBanner ? ImageView.ScaleType.CENTER_CROP : ImageView.ScaleType.FIT_CENTER);
-                int inset = hasBanner ? 0 : dp(32);
-                image.setPadding(inset, hasBanner ? 0 : dp(15), inset, hasBanner ? 0 : dp(46));
-                label.setVisibility(hasBanner ? GONE : VISIBLE);
-                if (!hasBanner) label.setText(app.label);
+                updateArtwork();
+            }
+
+            void setArtworkSize(int width, int height) {
+                if (artworkWidth == width && artworkHeight == height) return;
+                artworkWidth = width;
+                artworkHeight = height;
+                updateArtwork();
+            }
+
+            private void updateArtwork() {
+                if (bound == null || artworkWidth <= 0 || artworkHeight <= 0) return;
+                FrameLayout.LayoutParams imageParams = (FrameLayout.LayoutParams) image.getLayoutParams();
+                imageParams.setMarginStart(0);
+                image.setPadding(0, 0, 0, 0);
+                if (bound.artwork.fillsBanner(artworkWidth, artworkHeight)) {
+                    imageParams.width = -1;
+                    imageParams.height = -1;
+                    imageParams.gravity = Gravity.CENTER;
+                    imageParams.topMargin = 0;
+                    image.setClipToOutline(false);
+                    image.setBackground(null);
+                    image.setScaleType(ImageView.ScaleType.CENTER_CROP);
+                    image.setImageDrawable(copyArtwork(bound.artwork.banner));
+                    label.setVisibility(GONE);
+                } else {
+                    Drawable artwork = copyAppIcon(bound);
+                    int caption = Math.min(dp(42), artworkHeight / 3);
+                    int available = artworkHeight - caption;
+                    int target = Math.max(1, Math.min(dp(93), Math.min(available - dp(11), artworkWidth - dp(24))));
+                    int size = AppArtwork.fittedIconPixels(artwork, target, false);
+                    imageParams.width = size;
+                    imageParams.height = size;
+                    imageParams.gravity = Gravity.TOP | Gravity.CENTER_HORIZONTAL;
+                    imageParams.topMargin = (available - size) / 2 + dp(3);
+                    image.setBackground(roundedColor(Color.TRANSPARENT, 14));
+                    image.setClipToOutline(true);
+                    image.setScaleType(ImageView.ScaleType.FIT_CENTER);
+                    image.setImageDrawable(artwork);
+                    FrameLayout.LayoutParams textParams = (FrameLayout.LayoutParams) label.getLayoutParams();
+                    textParams.height = caption;
+                    textParams.setMarginStart(dp(10));
+                    textParams.setMarginEnd(dp(10));
+                    label.setLayoutParams(textParams);
+                    label.setVisibility(VISIBLE);
+                    label.setText(bound.label);
+                }
+                image.setLayoutParams(imageParams);
             }
         }
     }
